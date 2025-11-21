@@ -51,7 +51,7 @@ async function startApp() {
   try {
     await rbx.setCookie(cookie);
     const currentUser = await rbx.getAuthenticatedUser();
-    console.log("✅ Logged in as " + currentUser.name);
+    console.log(`✅ Logged in as ${currentUser.name}`);
   } catch (err) {
     console.error("❌ Login failed:", err);
     process.exit(1);
@@ -65,26 +65,26 @@ function logToDiscord(embed) {
 }
 
 async function createEmbed(action, userId, username, rankName, rankId, trainerId, isRoblox = false) {
-  let executor = "<@" + trainerId + ">";
+  let executor = `<@${trainerId}>`;
 
   if (isRoblox) {
     try {
       const trainerUsername = await rbx.getUsernameFromId(trainerId);
-      executor = trainerUsername + " (" + trainerId + ")";
+      executor = `${trainerUsername} (${trainerId})`;
     } catch {
-      executor = "Roblox User (" + trainerId + ")";
+      executor = `Roblox User (${trainerId})`;
     }
   }
 
   return {
-    title: "📋 " + action.toUpperCase() + " Action",
+    title: `📋 ${action.toUpperCase()} Action`,
     color:
       action === "promote" ? 0x2ecc71 :
       action === "demote" ? 0xe74c3c :
       0xf1c40f,
     fields: [
-      { name: "👤 Target User", value: username + " (" + userId + ")", inline: true },
-      { name: "🎖 Rank", value: rankName + " (Rank " + rankId + ")", inline: true },
+      { name: "👤 Target User", value: `${username} (${userId})`, inline: true },
+      { name: "🎖 Rank", value: `${rankName} (Rank ${rankId})`, inline: true },
       { name: "🛠 Executor", value: executor, inline: true },
       { name: "⏱ Time", value: new Date().toLocaleString(), inline: false }
     ],
@@ -92,7 +92,12 @@ async function createEmbed(action, userId, username, rankName, rankId, trainerId
   };
 }
 
-// Auth middleware
+// Public status endpoint
+app.get("/api/status", (req, res) => {
+  res.json({ online: true, message: "API is online", time: new Date().toISOString() });
+});
+
+// Auth middleware for other routes
 app.use((req, res, next) => {
   const authHeader = req.headers.authorization;
   const queryKey = req.query.key;
@@ -113,10 +118,6 @@ app.use((req, res, next) => {
 });
 
 // API Endpoints
-app.get("/api/status", (req, res) => {
-  res.json({ online: true, message: "API is online", time: new Date().toISOString() });
-});
-
 app.get("/api/roles", async (req, res) => {
   try {
     const roles = await rbx.getRoles(groupId);
@@ -133,14 +134,10 @@ app.post("/api/auth", (req, res) => {
   res.status(403).json({ error: "Invalid Maintainer Key" });
 });
 
-async function handleRankChange(req, res, isPost) {
-  if (isPost && req.authType !== "main") {
-    return res.status(403).json({ error: "Only maintainer can perform rank changes." });
-  } else if (!isPost && req.authType !== "roblox_api") {
-    return res.status(403).json({ error: "Invalid API key" });
-  }
+app.post("/api/:action(promote|demote|setrank)", async (req, res) => {
+  if (req.authType !== "main") return res.status(403).json({ error: "Only maintainer can perform rank changes." });
 
-  const { userid, trainerid, rank } = isPost ? req.body : req.query;
+  const { userid, trainerid, rank } = req.body;
   if (!userid || !trainerid) return res.status(400).json({ error: "Missing parameters" });
 
   const count = incrementAction(req.ip);
@@ -164,18 +161,49 @@ async function handleRankChange(req, res, isPost) {
     await rbx.setRank(groupId, targetUserId, targetRank);
     const username = await rbx.getUsernameFromId(targetUserId);
     const rankInfo = roles.find(r => r.rank === targetRank);
-    const embed = await createEmbed(req.params.action, targetUserId, username, rankInfo.name, targetRank, trainerid, !isPost);
+    const embed = await createEmbed(req.params.action, targetUserId, username, rankInfo.name, targetRank, trainerid, false);
     logToDiscord(embed);
 
-    res.json({ success: true, message: "User " + req.params.action + "d to " + rankInfo.name + " (Rank " + targetRank + ")" });
+    res.json({ success: true, message: `User ${username} ${req.params.action}d to ${rankInfo.name} (Rank ${targetRank})` });
   } catch (err) {
     console.error("Rank change failed:", err);
     res.status(500).json({ error: "Rank change failed", details: err.message });
   }
-}
+});
 
-app.post("/api/:action(promote|demote|setrank)", (req, res) => handleRankChange(req, res, true));
-app.get("/api/:action(promote|demote|setrank)", (req, res) => handleRankChange(req, res, false));
+app.get("/api/:action(promote|demote|setrank)", async (req, res) => {
+  if (req.authType !== "roblox_api") return res.status(403).json({ error: "Invalid API key" });
+
+  const { userid, trainerid, rank } = req.query;
+  if (!userid || !trainerid) return res.status(400).json({ error: "Missing parameters" });
+
+  try {
+    let targetUserId = isNaN(userid) ? await rbx.getIdFromUsername(userid) : parseInt(userid);
+    const currentRank = await rbx.getRankInGroup(groupId, targetUserId);
+    const roles = await rbx.getRoles(groupId);
+
+    let targetRank;
+    if (req.params.action === "promote") targetRank = roles.find(r => r.rank > currentRank)?.rank;
+    else if (req.params.action === "demote") targetRank = [...roles].reverse().find(r => r.rank < currentRank)?.rank;
+    else if (req.params.action === "setrank") {
+      if (!rank) return res.status(400).json({ error: "Rank required" });
+      targetRank = parseInt(rank);
+    }
+
+    if (!targetRank) return res.status(400).json({ error: "Invalid rank change" });
+
+    await rbx.setRank(groupId, targetUserId, targetRank);
+    const username = await rbx.getUsernameFromId(targetUserId);
+    const rankInfo = roles.find(r => r.rank === targetRank);
+    const embed = await createEmbed(req.params.action, targetUserId, username, rankInfo.name, targetRank, trainerid, true);
+    logToDiscord(embed);
+
+    res.json({ success: true, message: `User ${username} ${req.params.action}d to ${rankInfo.name} (Rank ${targetRank})` });
+  } catch (err) {
+    console.error("GET rank change failed:", err);
+    res.status(500).json({ error: "Rank change failed", details: err.message });
+  }
+});
 
 app.get("/api/userinfo", async (req, res) => {
   const { userid } = req.query;
@@ -207,16 +235,16 @@ app.post("/api/restart", (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("🌐 Server running on port " + PORT);
+  console.log(`🌐 Server running on port ${PORT}`);
 
   const parsedUrl = url.parse(SELF_URL);
   const getModule = parsedUrl.protocol === "https:" ? https : http;
 
   setInterval(() => {
     getModule.get(SELF_URL, res => {
-      console.log("🔁 Self-ping responded with " + res.statusCode);
+      console.log(`🔁 Self-ping responded with ${res.statusCode}`);
     }).on("error", err => {
-      console.error("❌ Self-ping error: " + err.message);
+      console.error(`❌ Self-ping error: ${err.message}`);
     });
   }, PING_INTERVAL);
 
