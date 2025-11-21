@@ -5,7 +5,6 @@ const rbx = require("noblox.js");
 const http = require("http");
 const https = require("https");
 const url = require("url");
-const path = require("path");
 
 const app = express();
 
@@ -14,7 +13,7 @@ const apiKey = process.env.API_KEY;
 const maintainerKey = process.env.MAINTAINER_KEY;
 const webhookURL = process.env.WEBHOOK;
 const groupId = parseInt(process.env.GROUP_ID);
-const SELF_URL = process.env.SELF_URL || "[https://your-app-name.onrender.com](https://your-app-name.onrender.com)";
+const SELF_URL = process.env.SELF_URL || "https://your-app-name.onrender.com";
 
 const PING_INTERVAL = 4 * 60 * 1000;
 const RESTART_INTERVAL = 60 * 60 * 1000;
@@ -22,12 +21,11 @@ const RESTART_INTERVAL = 60 * 60 * 1000;
 rbx.setOptions({ show_deprecation_warnings: false });
 app.set("trust proxy", 1);
 app.use(express.json());
-app.use(express.static(path.join(__dirname, "public")));
 
 const limiter = rateLimit({
-windowMs: 60 * 1000,
-max: 10,
-message: { error: "Too many requests, slow down." }
+  windowMs: 60 * 1000,
+  max: 10,
+  message: { error: "Too many requests, slow down." }
 });
 app.use(limiter);
 
@@ -36,237 +34,194 @@ const ACTION_LIMIT = 15;
 const ACTION_WINDOW = 10 * 60 * 1000;
 
 function incrementAction(ip) {
-if (!actionCounters[ip]) {
-actionCounters[ip] = { count: 1, firstAction: Date.now() };
-} else {
-const elapsed = Date.now() - actionCounters[ip].firstAction;
-if (elapsed > ACTION_WINDOW) {
-actionCounters[ip] = { count: 1, firstAction: Date.now() };
-} else {
-actionCounters[ip].count++;
-}
-}
-return actionCounters[ip].count;
+  if (!actionCounters[ip]) {
+    actionCounters[ip] = { count: 1, firstAction: Date.now() };
+  } else {
+    const elapsed = Date.now() - actionCounters[ip].firstAction;
+    if (elapsed > ACTION_WINDOW) {
+      actionCounters[ip] = { count: 1, firstAction: Date.now() };
+    } else {
+      actionCounters[ip].count++;
+    }
+  }
+  return actionCounters[ip].count;
 }
 
 async function startApp() {
-try {
-await rbx.setCookie(cookie);
-const currentUser = await rbx.getAuthenticatedUser();
-console.log(`✅ Logged in as ${currentUser.name}`);
-} catch (err) {
-console.error("❌ Login failed:", err);
-process.exit(1);
-}
+  try {
+    await rbx.setCookie(cookie);
+    const currentUser = await rbx.getAuthenticatedUser();
+    console.log("✅ Logged in as " + currentUser.name);
+  } catch (err) {
+    console.error("❌ Login failed:", err);
+    process.exit(1);
+  }
 }
 startApp();
 
 function logToDiscord(embed) {
-if (!webhookURL) return;
-axios.post(webhookURL, { embeds: [embed] }).catch(() => {});
+  if (!webhookURL) return;
+  axios.post(webhookURL, { embeds: [embed] }).catch(() => {});
 }
 
 async function createEmbed(action, userId, username, rankName, rankId, trainerId, isRoblox = false) {
-let executor = `<@${trainerId}>`;
+  let executor = "<@" + trainerId + ">";
 
-if (isRoblox) {
-try {
-const trainerUsername = await rbx.getUsernameFromId(trainerId);
-executor = `${trainerUsername} (${trainerId})`;
-} catch {
-executor = `Roblox User (${trainerId})`;
-}
+  if (isRoblox) {
+    try {
+      const trainerUsername = await rbx.getUsernameFromId(trainerId);
+      executor = trainerUsername + " (" + trainerId + ")";
+    } catch {
+      executor = "Roblox User (" + trainerId + ")";
+    }
+  }
+
+  return {
+    title: "📋 " + action.toUpperCase() + " Action",
+    color:
+      action === "promote" ? 0x2ecc71 :
+      action === "demote" ? 0xe74c3c :
+      0xf1c40f,
+    fields: [
+      { name: "👤 Target User", value: username + " (" + userId + ")", inline: true },
+      { name: "🎖 Rank", value: rankName + " (Rank " + rankId + ")", inline: true },
+      { name: "🛠 Executor", value: executor, inline: true },
+      { name: "⏱ Time", value: new Date().toLocaleString(), inline: false }
+    ],
+    timestamp: new Date()
+  };
 }
 
-return {
-title: `📋 ${action.toUpperCase()} Action`,
-color:
-action === "promote" ? 0x2ecc71 :
-action === "demote" ? 0xe74c3c :
-0xf1c40f,
-fields: [
-{ name: "👤 Target User", value: `${username} (${userId})`, inline: true },
-{ name: "🎖 Rank", value: `${rankName} (Rank ${rankId})`, inline: true },
-{ name: "🛠 Executor", value: executor, inline: true },
-{ name: "⏱ Time", value: new Date().toLocaleString(), inline: false }
-],
-timestamp: new Date()
-};
-}
-
-// Auth middleware: only maintainerKey or apiKey allowed
+// Auth middleware
 app.use((req, res, next) => {
-const authHeader = req.headers.authorization;
-const queryKey = req.query.key;
+  const authHeader = req.headers.authorization;
+  const queryKey = req.query.key;
 
-let authType = null;
-if (authHeader === `Bearer ${maintainerKey}`) {
-authType = "main";
-} else if (queryKey === apiKey) {
-authType = "roblox_api";
-}
+  let authType = null;
+  if (authHeader === "Bearer " + maintainerKey) {
+    authType = "main";
+  } else if (queryKey === apiKey) {
+    authType = "roblox_api";
+  }
 
-if (!authType) {
-return res.status(403).json({ error: "Unauthorized access: Invalid key." });
-}
+  if (!authType) {
+    return res.status(403).json({ error: "Unauthorized access: Invalid key." });
+  }
 
-req.authType = authType;
-next();
-});
-
-// Public pages
-app.get("/", (req, res) => {
-res.send("<h1>💂 Liam's British Army API</h1><p>The API is online. Contact @woozytheo for support.</p>");
-});
-app.get("/admin", (req, res) => {
-res.sendFile(path.join(__dirname, "public", "admin.html"));
+  req.authType = authType;
+  next();
 });
 
 // API Endpoints
 app.get("/api/status", (req, res) => {
-res.json({ online: true, message: "API is online", time: new Date().toISOString() });
+  res.json({ online: true, message: "API is online", time: new Date().toISOString() });
 });
 
 app.get("/api/roles", async (req, res) => {
-try {
-const roles = await rbx.getRoles(groupId);
-res.json(roles.map(r => ({ rank: r.rank, name: r.name })));
-} catch {
-res.status(500).json({ error: "Failed to fetch roles" });
-}
+  try {
+    const roles = await rbx.getRoles(groupId);
+    res.json(roles.map(r => ({ rank: r.rank, name: r.name })));
+  } catch {
+    res.status(500).json({ error: "Failed to fetch roles" });
+  }
 });
 
 app.post("/api/auth", (req, res) => {
-const { key } = req.body;
-if (!key) return res.status(403).json({ error: "No key provided" });
-if (key === maintainerKey) return res.json({ success: true, type: "main" });
-res.status(403).json({ error: "Invalid Maintainer Key" });
+  const { key } = req.body;
+  if (!key) return res.status(403).json({ error: "No key provided" });
+  if (key === maintainerKey) return res.json({ success: true, type: "main" });
+  res.status(403).json({ error: "Invalid Maintainer Key" });
 });
 
-app.post("/api/:action(promote|demote|setrank)", async (req, res) => {
-if (req.authType !== "main") {
-return res.status(403).json({ error: "Only maintainer can perform rank changes." });
+async function handleRankChange(req, res, isPost) {
+  if (isPost && req.authType !== "main") {
+    return res.status(403).json({ error: "Only maintainer can perform rank changes." });
+  } else if (!isPost && req.authType !== "roblox_api") {
+    return res.status(403).json({ error: "Invalid API key" });
+  }
+
+  const { userid, trainerid, rank } = isPost ? req.body : req.query;
+  if (!userid || !trainerid) return res.status(400).json({ error: "Missing parameters" });
+
+  const count = incrementAction(req.ip);
+  if (count > ACTION_LIMIT) return res.status(403).json({ error: "Too many actions." });
+
+  try {
+    let targetUserId = isNaN(userid) ? await rbx.getIdFromUsername(userid) : parseInt(userid);
+    const currentRank = await rbx.getRankInGroup(groupId, targetUserId);
+    const roles = await rbx.getRoles(groupId);
+
+    let targetRank;
+    if (req.params.action === "promote") targetRank = roles.find(r => r.rank > currentRank)?.rank;
+    else if (req.params.action === "demote") targetRank = [...roles].reverse().find(r => r.rank < currentRank)?.rank;
+    else if (req.params.action === "setrank") {
+      if (!rank) return res.status(400).json({ error: "Rank required" });
+      targetRank = parseInt(rank);
+    }
+
+    if (!targetRank) return res.status(400).json({ error: "Invalid rank change" });
+
+    await rbx.setRank(groupId, targetUserId, targetRank);
+    const username = await rbx.getUsernameFromId(targetUserId);
+    const rankInfo = roles.find(r => r.rank === targetRank);
+    const embed = await createEmbed(req.params.action, targetUserId, username, rankInfo.name, targetRank, trainerid, !isPost);
+    logToDiscord(embed);
+
+    res.json({ success: true, message: "User " + req.params.action + "d to " + rankInfo.name + " (Rank " + targetRank + ")" });
+  } catch (err) {
+    console.error("Rank change failed:", err);
+    res.status(500).json({ error: "Rank change failed", details: err.message });
+  }
 }
 
-const { userid, trainerid, rank } = req.body;
-if (!userid || !trainerid) return res.status(400).json({ error: "Missing parameters" });
-
-const count = incrementAction(req.ip);
-if (count > ACTION_LIMIT) return res.status(403).json({ error: "Too many actions." });
-
-try {
-let targetUserId = isNaN(userid) ? await rbx.getIdFromUsername(userid) : parseInt(userid);
-const currentRank = await rbx.getRankInGroup(groupId, targetUserId);
-const roles = await rbx.getRoles(groupId);
-
-```
-let targetRank;
-if (req.params.action === "promote") targetRank = roles.find(r => r.rank > currentRank)?.rank;
-else if (req.params.action === "demote") targetRank = [...roles].reverse().find(r => r.rank < currentRank)?.rank;
-else if (req.params.action === "setrank") {
-  if (!rank) return res.status(400).json({ error: "Rank required" });
-  targetRank = parseInt(rank);
-}
-
-if (!targetRank) return res.status(400).json({ error: "Invalid rank change" });
-
-await rbx.setRank(groupId, targetUserId, targetRank);
-const username = await rbx.getUsernameFromId(targetUserId);
-const rankInfo = roles.find(r => r.rank === targetRank);
-const embed = await createEmbed(req.params.action, targetUserId, username, rankInfo.name, targetRank, trainerid, false);
-logToDiscord(embed);
-
-res.json({ success: true, message: `User ${req.params.action}d to ${rankInfo.name} (Rank ${targetRank})` });
-```
-
-} catch (err) {
-console.error("Rank change failed:", err);
-res.status(500).json({ error: "Rank change failed", details: err.message });
-}
-});
-
-app.get("/api/:action(promote|demote|setrank)", async (req, res) => {
-if (req.authType !== "roblox_api") return res.status(403).json({ error: "Invalid API key" });
-
-const { userid, trainerid, rank } = req.query;
-if (!userid || !trainerid) return res.status(400).json({ error: "Missing parameters" });
-
-try {
-let targetUserId = isNaN(userid) ? await rbx.getIdFromUsername(userid) : parseInt(userid);
-const currentRank = await rbx.getRankInGroup(groupId, targetUserId);
-const roles = await rbx.getRoles(groupId);
-
-```
-let targetRank;
-if (req.params.action === "promote") targetRank = roles.find(r => r.rank > currentRank)?.rank;
-else if (req.params.action === "demote") targetRank = [...roles].reverse().find(r => r.rank < currentRank)?.rank;
-else if (req.params.action === "setrank") {
-  if (!rank) return res.status(400).json({ error: "Rank required" });
-  targetRank = parseInt(rank);
-}
-
-if (!targetRank) return res.status(400).json({ error: "Invalid rank change" });
-
-await rbx.setRank(groupId, targetUserId, targetRank);
-const username = await rbx.getUsernameFromId(targetUserId);
-const rankInfo = roles.find(r => r.rank === targetRank);
-const embed = await createEmbed(req.params.action, targetUserId, username, rankInfo.name, targetRank, trainerid, true);
-logToDiscord(embed);
-
-res.json({ success: true, message: `User ${req.params.action}d to ${rankInfo.name} (Rank ${targetRank})` });
-```
-
-} catch (err) {
-console.error("GET rank change failed:", err);
-res.status(500).json({ error: "Rank change failed", details: err.message });
-}
-});
+app.post("/api/:action(promote|demote|setrank)", (req, res) => handleRankChange(req, res, true));
+app.get("/api/:action(promote|demote|setrank)", (req, res) => handleRankChange(req, res, false));
 
 app.get("/api/userinfo", async (req, res) => {
-const { userid } = req.query;
-if (!userid) return res.status(400).json({ error: "No user ID or username provided" });
+  const { userid } = req.query;
+  if (!userid) return res.status(400).json({ error: "No user ID or username provided" });
 
-try {
-let userId = isNaN(userid) ? await rbx.getIdFromUsername(userid) : parseInt(userid);
-const [username, thumbnail, rankName] = await Promise.all([
-rbx.getUsernameFromId(userId),
-rbx.getPlayerThumbnail(userId, 150, "png", true, "headshot"),
-rbx.getRankNameInGroup(groupId, userId)
-]);
-res.json({
-userId,
-username,
-rank: rankName,
-headshotUrl: thumbnail[0]?.imageUrl || null
-});
-} catch (err) {
-res.status(500).json({ error: "Failed to fetch user info" });
-}
+  try {
+    let userId = isNaN(userid) ? await rbx.getIdFromUsername(userid) : parseInt(userid);
+    const [username, thumbnail, rankName] = await Promise.all([
+      rbx.getUsernameFromId(userId),
+      rbx.getPlayerThumbnail(userId, 150, "png", true, "headshot"),
+      rbx.getRankNameInGroup(groupId, userId)
+    ]);
+    res.json({
+      userId,
+      username,
+      rank: rankName,
+      headshotUrl: thumbnail[0]?.imageUrl || null
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch user info" });
+  }
 });
 
 app.post("/api/restart", (req, res) => {
-if (req.authType !== "main") return res.status(403).json({ error: "Unauthorized" });
-res.json({ message: "Restarting service..." });
-setTimeout(() => process.exit(0), 1000);
+  if (req.authType !== "main") return res.status(403).json({ error: "Unauthorized" });
+  res.json({ message: "Restarting service..." });
+  setTimeout(() => process.exit(0), 1000);
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-console.log(`🌐 Server running on port ${PORT}`);
+  console.log("🌐 Server running on port " + PORT);
 
-const parsedUrl = url.parse(SELF_URL);
-const getModule = parsedUrl.protocol === "https:" ? https : http;
+  const parsedUrl = url.parse(SELF_URL);
+  const getModule = parsedUrl.protocol === "https:" ? https : http;
 
-setInterval(() => {
-getModule.get(SELF_URL, res => {
-console.log(`🔁 Self-ping responded with ${res.statusCode}`);
-}).on("error", err => {
-console.error(`❌ Self-ping error: ${err.message}`);
-});
-}, PING_INTERVAL);
+  setInterval(() => {
+    getModule.get(SELF_URL, res => {
+      console.log("🔁 Self-ping responded with " + res.statusCode);
+    }).on("error", err => {
+      console.error("❌ Self-ping error: " + err.message);
+    });
+  }, PING_INTERVAL);
 
-setTimeout(() => {
-console.log("♻️ Restarting to avoid Render idle timeout...");
-process.exit(0);
-}, RESTART_INTERVAL);
+  setTimeout(() => {
+    console.log("♻️ Restarting to avoid Render idle timeout...");
+    process.exit(0);
+  }, RESTART_INTERVAL);
 });
