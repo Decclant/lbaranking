@@ -392,7 +392,7 @@ app.post("/api/restart", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("<h1>💂 Moon's British Army API</h1><p>The API is online. Contact @woozytheo for support.</p>");
+  res.send("<h1>💂 Liam's British Army API</h1><p>The API is online. Contact @woozytheo for support.</p>");
 });
 
 const PORT = process.env.PORT || 3000;
