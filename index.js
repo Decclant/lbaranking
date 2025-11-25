@@ -12,7 +12,7 @@ const cookie = process.env.COOKIE;
 const apiKey = process.env.API_KEY;
 const maintainerKey = process.env.MAINTAINER_KEY;
 const groupId = parseInt(process.env.GROUP_ID);
-const SELF_URL = process.env.SELF_URL || "https://your-app-name.onrender.com";
+const SELF_URL = process.env.SELF_URL || "https://lbaranking.onrender.com";
 
 const PING_INTERVAL = 4 * 60 * 1000;
 const RESTART_INTERVAL = 60 * 60 * 1000;
@@ -204,31 +204,29 @@ app.get("/api/userinfo", async (req, res) => {
   }
 });
 
-// ----- Restart -----
 app.post("/api/restart", (req, res) => {
   if (req.authType !== "main") return res.status(403).json({ error: "Unauthorized" });
   res.json({ message: "Restarting service..." });
   setTimeout(() => process.exit(0), 1000);
 });
 
-// ----- Server -----
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🌐 Server running on port ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 
   const parsedUrl = url.parse(SELF_URL);
   const getModule = parsedUrl.protocol === "https:" ? https : http;
 
   setInterval(() => {
     getModule.get(SELF_URL, res => {
-      console.log(`🔁 Self-ping responded with ${res.statusCode}`);
+      console.log(`Self-ping responded with ${res.statusCode}`);
     }).on("error", err => {
-      console.error(`❌ Self-ping error: ${err.message}`);
+      console.error(`Self-ping error: ${err.message}`);
     });
   }, PING_INTERVAL);
 
   setTimeout(() => {
-    console.log("♻️ Restarting to avoid Render idle timeout...");
+    console.log("Restarting to avoid Render idle timeout...");
     process.exit(0);
   }, RESTART_INTERVAL);
 });
